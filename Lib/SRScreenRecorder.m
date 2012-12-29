@@ -9,13 +9,15 @@
 #import "SRScreenRecorder.h"
 #import "KTouchPointerWindow.h"
 
+#define APPSTORE_SAFE 0
+
 #define DEFAULT_FRAME_INTERVAL 2
 #define DEFAULT_AUTOSAVE_DURATION 600
 #define TIME_SCALE 600
 
+#if !APPSTORE_SAFE
 static NSInteger counter;
-
-#if !TARGET_IPHONE_SIMULATOR
+#  if !TARGET_IPHONE_SIMULATOR
 CGImageRef UICreateCGImageFromIOSurface(CFTypeRef surface);
 CVReturn CVPixelBufferCreateWithIOSurface(
                                           CFAllocatorRef allocator,
@@ -30,10 +32,7 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 @interface UIScreen (ScreenRecorder)
 - (CGRect)_boundsInPixels;
 @end
-
-@interface UIImage (ScreenRecorder)
-- (UIImage *)initWithIOSurface:(CFTypeRef)surface;
-@end
+#  endif
 #endif
 
 @interface SRScreenRecorder ()
@@ -72,9 +71,13 @@ CVReturn CVPixelBufferCreateWithIOSurface(
         _autosaveDuration = DEFAULT_AUTOSAVE_DURATION;
         _showsTouchPointer = YES;
         
+#if APPSTORE_SAFE
+        queue = dispatch_get_main_queue();
+#else
         counter++;
         NSString *label = [NSString stringWithFormat:@"com.kishikawakatsumi.screen_recorder-%d", counter];
         queue = dispatch_queue_create([label cStringUsingEncoding:NSUTF8StringEncoding], NULL);
+#endif
         
         [self setupNotifications];
     }
@@ -101,8 +104,12 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     }
     
     UIScreen *mainScreen = [UIScreen mainScreen];
+#  if APPSTORE_SAFE
+    CGSize size = mainScreen.bounds.size;
+#  else
     CGRect boundsInPixels = [mainScreen _boundsInPixels];
     CGSize size = boundsInPixels.size;
+#  endif
     
     NSDictionary *outputSettings = @{AVVideoCodecKey : AVVideoCodecH264, AVVideoWidthKey : @(size.width), AVVideoHeightKey : @(size.height)};
     self.writerInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:outputSettings];
@@ -214,12 +221,34 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     dispatch_async(queue, ^
                    {
                        if (self.writerInput.readyForMoreMediaData) {
-                           CFTypeRef surface = [UIWindow createScreenIOSurface];
                            
-                           CVPixelBufferRef buffer = NULL;                           
+                           CVPixelBufferRef buffer = NULL;
+                           CFTypeRef backingData;
+#  if APPSTORE_SAFE
+                           UIImage *screenshot = [self screenshot];
+                           CGImageRef image = screenshot.CGImage;
+                           
+                           CFDataRef imageData = CGDataProviderCopyData(CGImageGetDataProvider(image));
+                           backingData = imageData;
+                           
+                           CVReturn status = kCVReturnSuccess;
+                           status = CVPixelBufferCreateWithBytes(kCFAllocatorDefault,
+                                                                 CGImageGetWidth(image),
+                                                                 CGImageGetHeight(image),
+                                                                 kCVPixelFormatType_32BGRA,
+                                                                 (void *)CFDataGetBytePtr(imageData),
+                                                                 CGImageGetBytesPerRow(image),
+                                                                 NULL,
+                                                                 NULL,
+                                                                 NULL,
+                                                                 &buffer);
+#  else
+                           CFTypeRef surface = [UIWindow createScreenIOSurface];
+                           backingData = surface;
                            
                            NSDictionary *pixelBufferAttributes = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA)};
                            CVPixelBufferCreateWithIOSurface(NULL, surface, (__bridge CFDictionaryRef)(pixelBufferAttributes), &buffer);
+#  endif
                            if (buffer) {
                                CFAbsoluteTime currentTime = CFAbsoluteTimeGetCurrent();
                                CFTimeInterval elapsedTime = currentTime - firstFrameTime;
@@ -230,10 +259,10 @@ CVReturn CVPixelBufferCreateWithIOSurface(
                                    [self stopRecording];
                                }
                                
-                               CFRelease(buffer);
+                               CVPixelBufferRelease(buffer);
                            }
                            
-                           CFRelease(surface);
+                           CFRelease(backingData);
                        }
                    });
     
@@ -248,6 +277,43 @@ CVReturn CVPixelBufferCreateWithIOSurface(
         [self rotateFile];
     }
 #endif
+}
+
+- (UIImage *)screenshot
+{
+    UIScreen *mainScreen = [UIScreen mainScreen];
+    CGSize imageSize = mainScreen.bounds.size;
+    if (NULL != UIGraphicsBeginImageContextWithOptions) {
+        UIGraphicsBeginImageContextWithOptions(imageSize, NO, 0);
+    } else {
+        UIGraphicsBeginImageContext(imageSize);
+    }
+    
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    
+    for (UIWindow *window in [[UIApplication sharedApplication] windows])
+    {
+        if (![window respondsToSelector:@selector(screen)] || window.screen == [UIScreen mainScreen])
+        {
+            CGContextSaveGState(context);
+            
+            CGContextTranslateCTM(context, window.center.x, window.center.y);
+            CGContextConcatCTM(context, [window transform]);
+            CGContextTranslateCTM(context,
+                                  -window.bounds.size.width * window.layer.anchorPoint.x,
+                                  -window.bounds.size.height * window.layer.anchorPoint.y);
+            
+            [window.layer renderInContext:context];
+            
+            CGContextRestoreGState(context);
+        }
+    }
+    
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    
+    UIGraphicsEndImageContext();
+    
+    return image;
 }
 
 #pragma mark Background tasks
