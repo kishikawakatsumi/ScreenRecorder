@@ -9,7 +9,9 @@
 #import "SRScreenRecorder.h"
 #import "KTouchPointerWindow.h"
 
+#ifndef APPSTORE_SAFE
 #define APPSTORE_SAFE 0
+#endif
 
 #define DEFAULT_FRAME_INTERVAL 2
 #define DEFAULT_AUTOSAVE_DURATION 600
