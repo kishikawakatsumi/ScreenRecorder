@@ -58,6 +58,11 @@ In default settings,
 }
  ```
 
+###When submit to AppStore if includes this library, define APPSTORE_SAFE macro to eliminate using undocumented API
+```objective-c
+#define APPSTORE_SAFE 1
+ ```
+
 ## 3rd party libraries
 
 **KTouchPointerWindow**  
