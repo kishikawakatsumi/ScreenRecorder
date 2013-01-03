@@ -10,23 +10,22 @@
 #import "KTouchPointerWindow.h"
 
 #ifndef APPSTORE_SAFE
-#define APPSTORE_SAFE 0
+#define APPSTORE_SAFE 1
 #endif
 
 #define DEFAULT_FRAME_INTERVAL 2
 #define DEFAULT_AUTOSAVE_DURATION 600
 #define TIME_SCALE 600
 
-#if !APPSTORE_SAFE
 static NSInteger counter;
-#  if !TARGET_IPHONE_SIMULATOR
+
+#if !APPSTORE_SAFE
 CGImageRef UICreateCGImageFromIOSurface(CFTypeRef surface);
 CVReturn CVPixelBufferCreateWithIOSurface(
                                           CFAllocatorRef allocator,
                                           CFTypeRef surface,
                                           CFDictionaryRef pixelBufferAttributes,
                                           CVPixelBufferRef *pixelBufferOut);
-
 @interface UIWindow (ScreenRecorder)
 + (CFTypeRef)createScreenIOSurface;
 @end
@@ -34,7 +33,6 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 @interface UIScreen (ScreenRecorder)
 - (CGRect)_boundsInPixels;
 @end
-#  endif
 #endif
 
 @interface SRScreenRecorder ()
@@ -73,13 +71,9 @@ CVReturn CVPixelBufferCreateWithIOSurface(
         _autosaveDuration = DEFAULT_AUTOSAVE_DURATION;
         _showsTouchPointer = YES;
         
-#if APPSTORE_SAFE
-        queue = dispatch_get_main_queue();
-#else
         counter++;
         NSString *label = [NSString stringWithFormat:@"com.kishikawakatsumi.screen_recorder-%d", counter];
         queue = dispatch_queue_create([label cStringUsingEncoding:NSUTF8StringEncoding], NULL);
-#endif
         
         [self setupNotifications];
     }
@@ -96,7 +90,6 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 
 - (void)setupAssetWriterWithURL:(NSURL *)outputURL
 {
-#if !TARGET_IPHONE_SIMULATOR
     NSError *error = nil;
     
     self.writer = [[AVAssetWriter alloc] initWithURL:outputURL fileType:AVFileTypeQuickTimeMovie error:&error];
@@ -106,12 +99,12 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     }
     
     UIScreen *mainScreen = [UIScreen mainScreen];
-#  if APPSTORE_SAFE
+#if APPSTORE_SAFE
     CGSize size = mainScreen.bounds.size;
-#  else
+#else
     CGRect boundsInPixels = [mainScreen _boundsInPixels];
     CGSize size = boundsInPixels.size;
-#  endif
+#endif
     
     NSDictionary *outputSettings = @{AVVideoCodecKey : AVVideoCodecH264, AVVideoWidthKey : @(size.width), AVVideoHeightKey : @(size.height)};
     self.writerInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:outputSettings];
@@ -129,7 +122,6 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     
     [self.writer startWriting];
     [self.writer startSessionAtSourceTime:kCMTimeZero];
-#endif
 }
 
 - (void)setupTouchPointer
@@ -158,18 +150,15 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 
 - (void)startRecording
 {
-#if !TARGET_IPHONE_SIMULATOR
     [self setupAssetWriterWithURL:[self outputFileURL]];
     
     [self setupTouchPointer];
     
     [self setupTimer];
-#endif
 }
 
 - (void)stopRecording
 {
-#if !TARGET_IPHONE_SIMULATOR
     [self.displayLink invalidate];
     startTimestamp = 0.0;
     
@@ -191,7 +180,6 @@ CVReturn CVPixelBufferCreateWithIOSurface(
                            [self restartRecordingIfNeeded];
                        }
                    });
-#endif
 }
 
 - (void)restartRecordingIfNeeded
@@ -219,38 +207,45 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 
 - (void)captureFrame:(CADisplayLink *)displayLink
 {
-#if !TARGET_IPHONE_SIMULATOR
     dispatch_async(queue, ^
                    {
                        if (self.writerInput.readyForMoreMediaData) {
-                           
+                           CVReturn status = kCVReturnSuccess;
                            CVPixelBufferRef buffer = NULL;
                            CFTypeRef backingData;
-#  if APPSTORE_SAFE
-                           UIImage *screenshot = [self screenshot];
+#if APPSTORE_SAFE || TARGET_IPHONE_SIMULATOR
+                           __block UIImage *screenshot = nil;
+                           dispatch_sync(dispatch_get_main_queue(), ^{
+                               screenshot = [self screenshot];
+                           });
                            CGImageRef image = screenshot.CGImage;
                            
-                           CFDataRef imageData = CGDataProviderCopyData(CGImageGetDataProvider(image));
-                           backingData = imageData;
+                           CGDataProviderRef dataProvider = CGImageGetDataProvider(image);
+                           CFDataRef data = CGDataProviderCopyData(dataProvider);
+                           backingData = CFDataCreateMutableCopy(kCFAllocatorDefault, CFDataGetLength(data), data);
+                           CFRelease(data);
                            
-                           CVReturn status = kCVReturnSuccess;
+                           const UInt8 *bytePtr = CFDataGetBytePtr(backingData);
+                           
                            status = CVPixelBufferCreateWithBytes(kCFAllocatorDefault,
                                                                  CGImageGetWidth(image),
                                                                  CGImageGetHeight(image),
                                                                  kCVPixelFormatType_32BGRA,
-                                                                 (void *)CFDataGetBytePtr(imageData),
+                                                                 (void *)bytePtr,
                                                                  CGImageGetBytesPerRow(image),
                                                                  NULL,
                                                                  NULL,
                                                                  NULL,
                                                                  &buffer);
-#  else
+                           NSParameterAssert(status == kCVReturnSuccess && buffer);
+#else
                            CFTypeRef surface = [UIWindow createScreenIOSurface];
                            backingData = surface;
                            
                            NSDictionary *pixelBufferAttributes = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA)};
-                           CVPixelBufferCreateWithIOSurface(NULL, surface, (__bridge CFDictionaryRef)(pixelBufferAttributes), &buffer);
-#  endif
+                           status = CVPixelBufferCreateWithIOSurface(NULL, surface, (__bridge CFDictionaryRef)(pixelBufferAttributes), &buffer);
+                           NSParameterAssert(status == kCVReturnSuccess && buffer);
+#endif
                            if (buffer) {
                                CFAbsoluteTime currentTime = CFAbsoluteTimeGetCurrent();
                                CFTimeInterval elapsedTime = currentTime - firstFrameTime;
@@ -278,14 +273,13 @@ CVReturn CVPixelBufferCreateWithIOSurface(
         startTimestamp = 0.0;
         [self rotateFile];
     }
-#endif
 }
 
 - (UIImage *)screenshot
 {
     UIScreen *mainScreen = [UIScreen mainScreen];
     CGSize imageSize = mainScreen.bounds.size;
-    if (NULL != UIGraphicsBeginImageContextWithOptions) {
+    if (UIGraphicsBeginImageContextWithOptions != NULL) {
         UIGraphicsBeginImageContextWithOptions(imageSize, NO, 0);
     } else {
         UIGraphicsBeginImageContext(imageSize);
@@ -293,10 +287,9 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     
     CGContextRef context = UIGraphicsGetCurrentContext();
     
-    for (UIWindow *window in [[UIApplication sharedApplication] windows])
-    {
-        if (![window respondsToSelector:@selector(screen)] || window.screen == [UIScreen mainScreen])
-        {
+    NSArray *windows = [[UIApplication sharedApplication] windows];
+    for (UIWindow *window in windows) {
+        if (![window respondsToSelector:@selector(screen)] || window.screen == mainScreen) {
             CGContextSaveGState(context);
             
             CGContextTranslateCTM(context, window.center.x, window.center.y);
@@ -305,7 +298,7 @@ CVReturn CVPixelBufferCreateWithIOSurface(
                                   -window.bounds.size.width * window.layer.anchorPoint.x,
                                   -window.bounds.size.height * window.layer.anchorPoint.y);
             
-            [window.layer renderInContext:context];
+            [window.layer.presentationLayer renderInContext:context];
             
             CGContextRestoreGState(context);
         }
