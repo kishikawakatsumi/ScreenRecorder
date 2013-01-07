@@ -10,7 +10,7 @@
 #import "KTouchPointerWindow.h"
 
 #ifndef APPSTORE_SAFE
-#define APPSTORE_SAFE 1
+#define APPSTORE_SAFE 0
 #endif
 
 #define DEFAULT_FRAME_INTERVAL 2
