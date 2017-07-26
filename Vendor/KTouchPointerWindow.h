@@ -13,5 +13,5 @@
  *      ...
  * }
  */
-void KTouchPointerWindowInstall();
-void KTouchPointerWindowUninstall();
+void KTouchPointerWindowInstall(void);
+void KTouchPointerWindowUninstall(void);
