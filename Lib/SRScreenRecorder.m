@@ -21,17 +21,19 @@ static NSInteger counter;
 
 #if !APPSTORE_SAFE
 CGImageRef UICreateCGImageFromIOSurface(CFTypeRef surface);
+#ifndef __IPHONE_11_0
 CVReturn CVPixelBufferCreateWithIOSurface(
                                           CFAllocatorRef allocator,
                                           CFTypeRef surface,
                                           CFDictionaryRef pixelBufferAttributes,
                                           CVPixelBufferRef *pixelBufferOut);
-@interface UIWindow (ScreenRecorder)
-+ (CFTypeRef)createScreenIOSurface;
-@end
+#endif
 
-@interface UIScreen (ScreenRecorder)
-- (CGRect)_boundsInPixels;
+@interface UIWindow (ScreenRecorder)
++ (IOSurfaceRef)createScreenIOSurface;
++ (IOSurfaceRef)createIOSurfaceFromScreen:(UIScreen *)screen;
+- (IOSurfaceRef)createIOSurface;
+- (IOSurfaceRef)createIOSurfaceWithFrame:(CGRect)frame;
 @end
 #endif
 
@@ -53,28 +55,19 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     UIBackgroundTaskIdentifier backgroundTask;
 }
 
-+ (SRScreenRecorder *)sharedInstance
-{
-    static SRScreenRecorder *sharedInstance = nil;
-    static dispatch_once_t pred;
-    dispatch_once(&pred, ^{
-        sharedInstance = [[SRScreenRecorder alloc] init];
-    });
-    return sharedInstance;
-}
-
-- (id)init
+- (instancetype)initWithWindow:(UIWindow *)window
 {
     self = [super init];
     if (self) {
+        _window = window;
         _frameInterval = DEFAULT_FRAME_INTERVAL;
         _autosaveDuration = DEFAULT_AUTOSAVE_DURATION;
         _showsTouchPointer = YES;
-        
+
         counter++;
-        NSString *label = [NSString stringWithFormat:@"com.kishikawakatsumi.screen_recorder-%d", counter];
+        NSString *label = [NSString stringWithFormat:@"com.kishikawakatsumi.screen_recorder-%@", @(counter)];
         queue = dispatch_queue_create([label cStringUsingEncoding:NSUTF8StringEncoding], NULL);
-        
+
         [self setupNotifications];
     }
     return self;
@@ -102,8 +95,8 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 #if APPSTORE_SAFE
     CGSize size = mainScreen.bounds.size;
 #else
-    CGRect boundsInPixels = [mainScreen _boundsInPixels];
-    CGSize size = boundsInPixels.size;
+    CGRect nativeBounds = [mainScreen nativeBounds];
+    CGSize size = nativeBounds.size;
 #endif
     
     NSDictionary *outputSettings = @{AVVideoCodecKey : AVVideoCodecH264, AVVideoWidthKey : @(size.width), AVVideoHeightKey : @(size.height)};
@@ -162,106 +155,95 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     [self.displayLink invalidate];
     startTimestamp = 0.0;
     
-    dispatch_async(queue, ^
-                   {
-                       if (self.writer.status != AVAssetWriterStatusCompleted && self.writer.status != AVAssetWriterStatusUnknown) {
-                           [self.writerInput markAsFinished];
-                       }
-                       if ([self.writer respondsToSelector:@selector(finishWritingWithCompletionHandler:)]) {
-                           [self.writer finishWritingWithCompletionHandler:^
-                            {
-                                [self finishBackgroundTask];
-                                [self restartRecordingIfNeeded];
-                            }];
-                       } else {
-                           [self.writer finishWriting];
-                           
-                           [self finishBackgroundTask];
-                           [self restartRecordingIfNeeded];
-                       }
-                   });
+    dispatch_async(queue, ^{
+        if (self.writer.status != AVAssetWriterStatusCompleted && self.writer.status != AVAssetWriterStatusUnknown) {
+            [self.writerInput markAsFinished];
+        }
+        [self.writer finishWritingWithCompletionHandler:^
+         {
+             [self finishBackgroundTask];
+             [self restartRecordingIfNeeded];
+         }];
+    });
 }
 
 - (void)restartRecordingIfNeeded
 {
     if (shouldRestart) {
         shouldRestart = NO;
-        dispatch_async(queue, ^
-                       {
-                           dispatch_async(dispatch_get_main_queue(), ^
-                                          {
-                                              [self startRecording];
-                                          });
-                       });
+        dispatch_async(queue, ^{
+            dispatch_async(dispatch_get_main_queue(), ^
+                           {
+                               [self startRecording];
+                           });
+        });
     }
 }
 
 - (void)rotateFile
 {
     shouldRestart = YES;
-    dispatch_async(queue, ^
-                   {
-                       [self stopRecording];
-                   });
+    dispatch_async(queue, ^{
+        [self stopRecording];
+    });
 }
 
 - (void)captureFrame:(CADisplayLink *)displayLink
 {
-    dispatch_async(queue, ^
-                   {
-                       if (self.writerInput.readyForMoreMediaData) {
-                           CVReturn status = kCVReturnSuccess;
-                           CVPixelBufferRef buffer = NULL;
-                           CFTypeRef backingData;
+    dispatch_async(queue, ^{
+        if (self.writerInput.readyForMoreMediaData) {
+            CVReturn status = kCVReturnSuccess;
+            CVPixelBufferRef buffer = NULL;
+            CFTypeRef backingData;
 #if APPSTORE_SAFE || TARGET_IPHONE_SIMULATOR
-                           __block UIImage *screenshot = nil;
-                           dispatch_sync(dispatch_get_main_queue(), ^{
-                               screenshot = [self screenshot];
-                           });
-                           CGImageRef image = screenshot.CGImage;
-                           
-                           CGDataProviderRef dataProvider = CGImageGetDataProvider(image);
-                           CFDataRef data = CGDataProviderCopyData(dataProvider);
-                           backingData = CFDataCreateMutableCopy(kCFAllocatorDefault, CFDataGetLength(data), data);
-                           CFRelease(data);
-                           
-                           const UInt8 *bytePtr = CFDataGetBytePtr(backingData);
-                           
-                           status = CVPixelBufferCreateWithBytes(kCFAllocatorDefault,
-                                                                 CGImageGetWidth(image),
-                                                                 CGImageGetHeight(image),
-                                                                 kCVPixelFormatType_32BGRA,
-                                                                 (void *)bytePtr,
-                                                                 CGImageGetBytesPerRow(image),
-                                                                 NULL,
-                                                                 NULL,
-                                                                 NULL,
-                                                                 &buffer);
-                           NSParameterAssert(status == kCVReturnSuccess && buffer);
+            __block UIImage *screenshot = nil;
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                screenshot = [self screenshot];
+            });
+            CGImageRef image = screenshot.CGImage;
+
+            CGDataProviderRef dataProvider = CGImageGetDataProvider(image);
+            CFDataRef data = CGDataProviderCopyData(dataProvider);
+            backingData = CFDataCreateMutableCopy(kCFAllocatorDefault, CFDataGetLength(data), data);
+            CFRelease(data);
+
+            const UInt8 *bytePtr = CFDataGetBytePtr(backingData);
+
+            status = CVPixelBufferCreateWithBytes(kCFAllocatorDefault,
+                                                  CGImageGetWidth(image),
+                                                  CGImageGetHeight(image),
+                                                  kCVPixelFormatType_32BGRA,
+                                                  (void *)bytePtr,
+                                                  CGImageGetBytesPerRow(image),
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  &buffer);
+            NSParameterAssert(status == kCVReturnSuccess && buffer);
 #else
-                           CFTypeRef surface = [UIWindow createScreenIOSurface];
-                           backingData = surface;
-                           
-                           NSDictionary *pixelBufferAttributes = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA)};
-                           status = CVPixelBufferCreateWithIOSurface(NULL, surface, (__bridge CFDictionaryRef)(pixelBufferAttributes), &buffer);
-                           NSParameterAssert(status == kCVReturnSuccess && buffer);
+            IOSurfaceRef surface = [self.window createIOSurface];
+            backingData = surface;
+
+            NSDictionary *pixelBufferAttributes = @{(NSString *)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA)};
+            status = CVPixelBufferCreateWithIOSurface(NULL, surface, (__bridge CFDictionaryRef _Nullable)(pixelBufferAttributes), &buffer);
+            NSParameterAssert(status == kCVReturnSuccess && buffer);
 #endif
-                           if (buffer) {
-                               CFAbsoluteTime currentTime = CFAbsoluteTimeGetCurrent();
-                               CFTimeInterval elapsedTime = currentTime - firstFrameTime;
-                               
-                               CMTime presentTime =  CMTimeMake(elapsedTime * TIME_SCALE, TIME_SCALE);
-                               
-                               if(![self.writerInputPixelBufferAdaptor appendPixelBuffer:buffer withPresentationTime:presentTime]) {
-                                   [self stopRecording];
-                               }
-                               
-                               CVPixelBufferRelease(buffer);
-                           }
-                           
-                           CFRelease(backingData);
-                       }
-                   });
+            if (buffer) {
+                CFAbsoluteTime currentTime = CFAbsoluteTimeGetCurrent();
+                CFTimeInterval elapsedTime = currentTime - firstFrameTime;
+
+                CMTime presentTime =  CMTimeMake(elapsedTime * TIME_SCALE, TIME_SCALE);
+
+                if(![self.writerInputPixelBufferAdaptor appendPixelBuffer:buffer withPresentationTime:presentTime]) {
+                    [self stopRecording];
+                }
+
+                CVPixelBufferRelease(buffer);
+            }
+
+            CFRelease(backingData);
+        }
+    });
     
     if (startTimestamp == 0.0) {
         startTimestamp = displayLink.timestamp;
@@ -279,11 +261,7 @@ CVReturn CVPixelBufferCreateWithIOSurface(
 {
     UIScreen *mainScreen = [UIScreen mainScreen];
     CGSize imageSize = mainScreen.bounds.size;
-    if (UIGraphicsBeginImageContextWithOptions != NULL) {
-        UIGraphicsBeginImageContextWithOptions(imageSize, NO, 0);
-    } else {
-        UIGraphicsBeginImageContext(imageSize);
-    }
+    UIGraphicsBeginImageContextWithOptions(imageSize, NO, 0);
     
     CGContextRef context = UIGraphicsGetCurrentContext();
     
@@ -377,7 +355,7 @@ CVReturn CVPixelBufferCreateWithIOSurface(
     
     fileCounter++;
     NSString *pathExtension = [filename pathExtension];
-    filename = [[[filename stringByDeletingPathExtension] stringByAppendingString:[NSString stringWithFormat:@"-%d", fileCounter]] stringByAppendingPathExtension:pathExtension];
+    filename = [[[filename stringByDeletingPathExtension] stringByAppendingString:[NSString stringWithFormat:@"-%@", @(fileCounter)]] stringByAppendingPathExtension:pathExtension];
     
     if ([self existsFile:filename]) {
         return [self nextFilename:filename];

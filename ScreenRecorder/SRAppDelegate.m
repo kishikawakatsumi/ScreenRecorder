@@ -9,11 +9,15 @@
 #import "SRAppDelegate.h"
 #import "SRScreenRecorder.h"
 
-@implementation SRAppDelegate
+@implementation SRAppDelegate {
+    SRScreenRecorder *screenRecorder;
+}
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
-    [[SRScreenRecorder sharedInstance] startRecording];
+    screenRecorder = [[SRScreenRecorder alloc] initWithWindow:self.window];
+    [screenRecorder startRecording];
+    
     return YES;
 }
 
