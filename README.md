@@ -1,8 +1,9 @@
-ScreenRecorder
-==============
+# ScreenRecorder
+
 Capturing a screen as videos on iOS devices for user testing.
 
 ## Features
+
 * Screen capture
 * Show touch pointer
 * Autosave and file rotation
@@ -10,21 +11,24 @@ Capturing a screen as videos on iOS devices for user testing.
 
 ## Setup
 
-###1. Add the files  
+### 1. Add the files  
+
 Copy the files you need to your project folder, and add them to your Xcode project.
   * Lib/SRScreenRecorder.h
   * Lib/SRScreenRecorder.m
   * Vendor/KTouchPointerWindow.h
   * Vendor/KTouchPointerWindow.m
 
-###2. Link with the frameworks
+### 2. Link with the frameworks
+
   * QuartzCore.framework
   * CoreVideo.framework
   * CoreMedia.framework
   * AVFoundation.framework
 
 ## Usage
-###Basic  
+
+### Basic  
 ```objective-c
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
@@ -40,7 +44,8 @@ In default settings,
 * 30 FPS
 * shows touch pointer
 
-###Customize  
+### Customize  
+
 ```objective-c
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
@@ -58,7 +63,10 @@ In default settings,
 }
  ```
 
-###When submit to AppStore if includes this library, define APPSTORE_SAFE macro to eliminate using undocumented API
+### NOTE
+
+> When you submit to the App Store, if your app includes this library, define the `APPSTORE_SAFE` macro to eliminate "using Undocumented API" issues 
+
 ```objective-c
 #define APPSTORE_SAFE 1
  ```
